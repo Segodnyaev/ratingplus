@@ -13,6 +13,10 @@
  *   POST {"url":..., "method":"POST", "body":"a=1&b=2", "contentType":"application/x-www-form-urlencoded"}
  *                              — произвольный запрос к целевому сайту (нужен для ASP.NET-постбэков
  *                                архивных турниров chess-results: «Отобразить дополнительную информацию»)
+ *
+ * Ответ содержит заголовок X-Final-Url — адрес после всех редиректов (клиент
+ * использует его, чтобы слать POST-постбэк прямо на финальный хост s3.chess-results.com,
+ * а не на исходный, который 302-редиректит).
  *   OPTIONS                     — 204 c CORS-заголовками (preflight)
  *   ошибка                      — JSON {"error": "...", "details": "..."}
  *
@@ -55,6 +59,8 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, x-target-url',
+  // X-Final-Url читает браузер клиента — без Expose-Headers он будет скрыт
+  'Access-Control-Expose-Headers': 'X-Final-Url',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -68,13 +74,14 @@ function jsonResponse(statusCode, payload) {
   };
 }
 
-function textResponse(statusCode, body, contentType) {
+function textResponse(statusCode, body, contentType, extraHeaders) {
   return {
     statusCode,
     headers: {
       ...CORS_HEADERS,
       'Content-Type': contentType,
       'Cache-Control': 'no-store',
+      ...(extraHeaders || {}),
     },
     body,
   };
@@ -149,9 +156,14 @@ function hostAllowed(hostname) {
 }
 
 /**
- * Скачивает URL по http(s). Возвращает { status, headers, buffer }.
- * Редиректы (301/302/303/307/308) обрабатываются автоматически
- * (после POST-редиректа следующий запрос идёт методом GET, как по HTTP-стандарту).
+ * Скачивает URL по http(s). Возвращает { status, headers, buffer, finalUrl }.
+ * Редиректы (301/302/303/307/308) обрабатываются автоматически.
+ *
+ * ВАЖНО про POST и редиректы: chess-results.com балансирует нагрузку 302-редиректом
+ * даже POST-запросы (POST на chess-results.com → 302 на s3.chess-results.com).
+ * По HTTP-стандарту после 301/302/303 клиент должен повторить запрос методом GET
+ * без тела — но тогда ASP.NET-постбэк теряется и сервер возвращает урезанную
+ * страницу. Поэтому метод и тело сохраняются при всех редиректах.
  */
 function fetchUpstream(url, redirectsLeft, opts) {
   const options = opts || {};
@@ -193,7 +205,8 @@ function fetchUpstream(url, redirectsLeft, opts) {
             return;
           }
           const next = new URL(location, parsed).toString();
-          fetchUpstream(next, redirectsLeft - 1).then(resolve, reject);
+          // сохраняем method/body/contentType — см. комментарий выше про POST и 302
+          fetchUpstream(next, redirectsLeft - 1, options).then(resolve, reject);
           return;
         }
 
@@ -208,7 +221,9 @@ function fetchUpstream(url, redirectsLeft, opts) {
           }
           chunks.push(chunk);
         });
-        res.on('end', () => resolve({ status, headers: res.headers, buffer: Buffer.concat(chunks) }));
+        res.on('end', () =>
+          resolve({ status, headers: res.headers, buffer: Buffer.concat(chunks), finalUrl: url }),
+        );
         res.on('error', reject);
       },
     );
@@ -295,19 +310,25 @@ exports.handler = async (event, context) => {
     const contentType = upstream.headers['content-type'] || 'text/html; charset=utf-8';
     const ms = Date.now() - started;
 
+    const finalUrl = upstream.finalUrl || parsed.toString();
     const isText = /^\s*(text\/|application\/(json|javascript|xml|xhtml))/i.test(contentType);
     if (isText) {
       const charset = detectCharset(upstream.buffer, contentType);
       const body = decodeText(upstream.buffer, charset);
-      console.log('[proxy] 200', parsed.host + parsed.pathname, ms + 'ms', charset, body.length + 'B');
-      return textResponse(upstream.status, body, 'text/html; charset=utf-8');
+      console.log('[proxy] 200', parsed.host + ' → ' + new URL(finalUrl).host + parsed.pathname, ms + 'ms', charset, body.length + 'B');
+      return textResponse(
+        upstream.status,
+        body,
+        'text/html; charset=utf-8',
+        { 'X-Final-Url': finalUrl },
+      );
     }
 
     // Не текст (картинка, pdf и т.п.) — отдаём как base64, чтобы не испортить байты
     console.log('[proxy] 200 (binary)', parsed.host + parsed.pathname, ms + 'ms', upstream.buffer.length + 'B');
     return {
       statusCode: upstream.status,
-      headers: { ...CORS_HEADERS, 'Content-Type': contentType, 'Cache-Control': 'no-store' },
+      headers: { ...CORS_HEADERS, 'Content-Type': contentType, 'Cache-Control': 'no-store', 'X-Final-Url': finalUrl },
       body: upstream.buffer.toString('base64'),
       isBase64Encoded: true,
     };
