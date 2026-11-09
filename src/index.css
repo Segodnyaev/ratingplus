@@ -736,6 +736,16 @@ table.mini {
   font-weight: 700;
 }
 
+/* длинная таблица ожидаемых результатов — прокручивается внутри карточки */
+.mini-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 0 4px;
+}
+
 .notes {
   margin: 18px 0 16px;
   padding-left: 20px;

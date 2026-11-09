@@ -53,7 +53,6 @@ export default function ResultPanel({
   const { player, calc, opponents } = result
   const unplayed = opponents.filter((o) => o.score == null).length
   const unknownOpp = opponents.filter((o) => o.rating == null && o.score != null).length
-  const lastDiff = EXPECTED_TABLE[EXPECTED_TABLE.length - 1].diff
 
   return (
     <div className="result">
@@ -128,7 +127,7 @@ export default function ResultPanel({
           </div>
         )}
         {calc.playedGames === 0 && (
-          <div className="warn-line">Нет сыгранных партий — рассчитать изменение не возможно.</div>
+          <div className="warn-line">Нет сыгранных партий — рассчитать изменение невозможно.</div>
         )}
       </section>
 
@@ -237,37 +236,44 @@ export default function ResultPanel({
             </table>
           </div>
           <div>
-            <h4>Ожидаемый результат за партию</h4>
-            <table className="mini">
-              <thead>
-                <tr>
-                  <th>Разница рейтингов*</th>
-                  <th className="num">У сильного</th>
-                  <th className="num">У слабого</th>
-                </tr>
-              </thead>
-              <tbody>
-                {EXPECTED_TABLE.map((r) => (
-                  <tr key={r.diff}>
-                    <td>
-                      {r.diff === 0 ? '0' : r.diff === lastDiff ? `${r.diff} и больше` : r.diff}
-                    </td>
-                    <td className="num">{r.strong.toFixed(2).replace('.', ',')}</td>
-                    <td className="num">{(1 - r.strong).toFixed(2).replace('.', ',')}</td>
+            <h4>Таблица преобразования разности рейтингов</h4>
+            <div className="mini-scroll">
+              <table className="mini">
+                <thead>
+                  <tr>
+                    <th>Разница рейтингов*</th>
+                    <th className="num">У сильного</th>
+                    <th className="num">У слабого</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {EXPECTED_TABLE.map((r) => (
+                    <tr key={r.from}>
+                      <td>
+                        {r.to == null
+                          ? `${r.from} и больше`
+                          : r.from === r.to
+                            ? String(r.from)
+                            : `${r.from}–${r.to}`}
+                      </td>
+                      <td className="num">{r.strong.toFixed(2).replace('.', ',')}</td>
+                      <td className="num">{(1 - r.strong).toFixed(2).replace('.', ',')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <p className="hint">
-              * насколько рейтинг соперника выше рейтинга игрока; разница больше 400 считается как
-              400, промежуточные значения интерполируются линейно.
+              * насколько рейтинг соперника выше рейтинга игрока (у слабого значения зеркальные);
+              разница 392 и больше — 0,92 против 0,08, значений выше 0,92 в системе ФШР нет.
+              Значение берётся из диапазона целиком, без интерполяции.
             </p>
           </div>
         </div>
         <ul className="notes">
           <li>
             Изменение рейтинга: <b>Δ = K × (W − We)</b>, где W — набранные очки, We — ожидаемые
-            очки. Итог округляется до целого числа.
+            очки. Итог округляется до целого (0,5 — в большую сторону).
           </li>
           <li>Партии, на которые соперник не явился, в расчёт не включаются.</li>
           <li>
