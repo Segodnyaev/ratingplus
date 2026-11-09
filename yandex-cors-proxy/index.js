@@ -7,13 +7,16 @@
  * Функция скачивает страницу и возвращает её как есть, добавив CORS-заголовки
  * (Access-Control-Allow-Origin: *), чтобы браузер разрешил чтение ответа.
  *
- * Контракт сознательно совпадает с прежней версией функции:
- *   ?url=...           — целевой адрес (также принимается заголовок x-target-url
- *                          и POST-тело: JSON {"url":...} / форма url=... / сырой URL)
- *   OPTIONS            — 204 c CORS-заголовками (preflight)
- *   ошибка             — JSON {"error": "...", "details": "..."}
+ * Контракт сознательно совместим с прежней версией функции:
+ *   GET ?url=...               — скачать страницу (также понимает заголовок x-target-url)
+ *   POST {"url": ...}          — то же самое (JSON-конверт)
+ *   POST {"url":..., "method":"POST", "body":"a=1&b=2", "contentType":"application/x-www-form-urlencoded"}
+ *                              — произвольный запрос к целевому сайту (нужен для ASP.NET-постбэков
+ *                                архивных турниров chess-results: «Отобразить дополнительную информацию»)
+ *   OPTIONS                     — 204 c CORS-заголовками (preflight)
+ *   ошибка                      — JSON {"error": "...", "details": "..."}
  *
- * Runtime: nodejs18 (и новее), без внешних зависимостей — только встроенный https.
+ * Runtime: nodejs18 (и новше), без внешних зависимостей — только встроенный https.
  * Entry point: index.handler
  *
  * Настройки (можно задать как переменные окружения функции):
@@ -84,37 +87,57 @@ function getHeader(headers, name) {
 }
 
 /**
- * Достаёт целевой URL из запроса: query-параметр url, заголовок x-target-url
- * или POST-тело (JSON / form-urlencoded / сырой адрес).
+ * Разбирает запрос: целевой URL, метод, тело и его тип.
+ * Поддерживает: query-параметр url, заголовок x-target-url, POST-тело
+ * (JSON-конверт {url, method, body, contentType} / JSON {url} / форма / сырой адрес).
  */
-function extractTargetUrl(event) {
+function extractRequest(event) {
   const q = event.queryStringParameters || {};
-  if (q.url && String(q.url).trim()) return String(q.url).trim();
+  const fromQuery = q.url && String(q.url).trim() ? String(q.url).trim() : null;
 
   const fromHeader = getHeader(event.headers, 'x-target-url');
-  if (fromHeader && String(fromHeader).trim()) return String(fromHeader).trim();
+  const headerUrl = fromHeader && String(fromHeader).trim() ? String(fromHeader).trim() : null;
 
   if (event.body) {
     const body = event.isBase64Encoded
       ? Buffer.from(event.body, 'base64').toString('utf8')
       : String(event.body);
     const trimmed = body.trim();
-    if (trimmed) {
-      if (trimmed.startsWith('{')) {
-        try {
-          const parsed = JSON.parse(trimmed);
-          if (parsed && typeof parsed.url === 'string' && parsed.url.trim()) return parsed.url.trim();
-        } catch (_) { /* не JSON — попробуем формы ниже */ }
-      }
-      if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    if (trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed.url === 'string' && parsed.url.trim()) {
+          const method = String(parsed.method || 'GET').toUpperCase();
+          const reqBody = typeof parsed.body === 'string' ? parsed.body : undefined;
+          const contentType = typeof parsed.contentType === 'string' ? parsed.contentType : undefined;
+          if (reqBody !== undefined && method !== 'POST' && method !== 'PUT') {
+            return { error: 'Invalid request', details: 'Тело запроса разрешено только для POST/PUT' };
+          }
+          if (reqBody !== undefined && reqBody.length > 1024 * 1024) {
+            return { error: 'Invalid request', details: 'Тело запроса больше 1 МБ' };
+          }
+          return {
+            target: parsed.url.trim(),
+            method: method === 'POST' || method === 'PUT' ? method : 'GET',
+            body: reqBody,
+            contentType,
+          };
+        }
+      } catch (_) { /* не JSON — попробуем формы ниже */ }
+    }
+    if (!fromQuery && !headerUrl && trimmed) {
+      if (/^https?:\/\//i.test(trimmed)) return { target: trimmed, method: 'GET' };
       try {
         const form = new URLSearchParams(trimmed);
         const u = form.get('url');
-        if (u && u.trim()) return u.trim();
+        if (u && u.trim()) return { target: u.trim(), method: 'GET' };
       } catch (_) { /* ignore */ }
     }
   }
-  return null;
+
+  if (fromQuery) return { target: fromQuery, method: 'GET' };
+  if (headerUrl) return { target: headerUrl, method: 'GET' };
+  return { error: null, target: null };
 }
 
 function hostAllowed(hostname) {
@@ -127,9 +150,11 @@ function hostAllowed(hostname) {
 
 /**
  * Скачивает URL по http(s). Возвращает { status, headers, buffer }.
- * Редиректы (301/302/303/307/308) обрабатываются автоматически.
+ * Редиректы (301/302/303/307/308) обрабатываются автоматически
+ * (после POST-редиректа следующий запрос идёт методом GET, как по HTTP-стандарту).
  */
-function fetchUpstream(url, redirectsLeft) {
+function fetchUpstream(url, redirectsLeft, opts) {
+  const options = opts || {};
   return new Promise((resolve, reject) => {
     let parsed;
     try {
@@ -141,15 +166,20 @@ function fetchUpstream(url, redirectsLeft) {
 
     const isHttps = parsed.protocol === 'https:';
     const lib = isHttps ? https : http;
+    const requestHeaders = {
+      'User-Agent': USER_AGENT,
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'ru,en;q=0.8',
+    };
+    if (options.body !== undefined) {
+      requestHeaders['Content-Type'] = options.contentType || 'application/x-www-form-urlencoded';
+      requestHeaders['Content-Length'] = Buffer.byteLength(options.body);
+    }
     const req = lib.request(
       parsed,
       {
-        method: 'GET',
-        headers: {
-          'User-Agent': USER_AGENT,
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'ru,en;q=0.8',
-        },
+        method: options.method || 'GET',
+        headers: requestHeaders,
         timeout: UPSTREAM_TIMEOUT_MS,
       },
       (res) => {
@@ -187,6 +217,7 @@ function fetchUpstream(url, redirectsLeft) {
       req.destroy(new Error('сервер не ответил за ' + Math.round(UPSTREAM_TIMEOUT_MS / 1000) + ' сек'));
     });
     req.on('error', reject);
+    if (options.body !== undefined) req.write(options.body);
     req.end();
   });
 }
@@ -225,20 +256,22 @@ exports.handler = async (event, context) => {
     return { statusCode: 204, headers: CORS_HEADERS, body: '' };
   }
 
-  // 2. Куда идём
-  const target = extractTargetUrl(event);
-  if (!target) {
+  // 2. Куда и как идём
+  const request = extractRequest(event);
+  if (request.error || !request.target) {
     return jsonResponse(400, {
-      error: 'Missing "url" parameter',
-      details: 'Usage: https://functions.yandexcloud.net/<function-id>?url=<urlencoded URL>',
+      error: request.error || 'Missing "url" parameter',
+      details:
+        request.details ||
+        'Usage: https://functions.yandexcloud.net/<function-id>?url=<urlencoded URL>',
     });
   }
 
   let parsed;
   try {
-    parsed = new URL(target);
+    parsed = new URL(request.target);
   } catch (_) {
-    return jsonResponse(400, { error: 'Invalid URL', details: 'Не удалось разобрать адрес: ' + target });
+    return jsonResponse(400, { error: 'Invalid URL', details: 'Не удалось разобрать адрес: ' + request.target });
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
     return jsonResponse(400, { error: 'Invalid URL', details: 'Разрешены только http:// и https://' });
@@ -254,7 +287,11 @@ exports.handler = async (event, context) => {
 
   // 3. Скачиваем и отдаём
   try {
-    const upstream = await fetchUpstream(parsed.toString(), MAX_REDIRECTS);
+    const upstream = await fetchUpstream(parsed.toString(), MAX_REDIRECTS, {
+      method: request.method,
+      body: request.body,
+      contentType: request.contentType,
+    });
     const contentType = upstream.headers['content-type'] || 'text/html; charset=utf-8';
     const ms = Date.now() - started;
 
