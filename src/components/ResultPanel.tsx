@@ -58,10 +58,6 @@ export default function ResultPanel({
   return (
     <div className="result">
       <section className="card player-card fade-up">
-        <div className="player-top">
-          <h2>{player.name}</h2>
-          <span className="chip">{result.manual ? 'локальные файлы' : `источник: ${result.via}`}</span>
-        </div>
         {result.startListTitle && <div className="player-meta">{result.startListTitle}</div>}
         <div className="player-meta">
           {[player.club, player.born ? `г.р. ${player.born}` : null, player.federation]
@@ -279,15 +275,7 @@ export default function ResultPanel({
             chess-results.com.
           </li>
           <li>
-            Источник правил:{' '}
-            <a
-              href="https://fenomenchess.ru/articles/reiting-fshr/"
-              target="_blank"
-              rel="noreferrer"
-            >
-              fenomenchess.ru
-            </a>
-            . Официальный пересчёт выполняет ФШР — результат здесь оценочный.
+            Официальный пересчёт выполняет ФШР — результат здесь оценочный.
           </li>
         </ul>
       </details>

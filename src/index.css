@@ -94,16 +94,15 @@ a:hover {
   border-radius: 14px;
   display: grid;
   place-items: center;
-  color: #fff;
-  background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
   box-shadow: 0 8px 28px rgba(124, 92, 255, 0.4);
   flex-shrink: 0;
 }
 
 .logo svg {
-  width: 32px;
-  height: 32px;
+  width: 46px;
+  height: 46px;
   display: block;
+  border-radius: 14px;
 }
 
 .top h1 {
@@ -121,7 +120,7 @@ a:hover {
 
 /* ===== водяной знак на фоне ===== */
 
-.bg-knight {
+.bg-queen {
   position: fixed;
   right: -60px;
   bottom: -70px;
@@ -131,11 +130,10 @@ a:hover {
   color: #fff;
   opacity: 0.05;
   pointer-events: none;
-  transform: rotate(-14deg);
   filter: drop-shadow(0 0 70px rgba(124, 92, 255, 0.3));
 }
 
-.bg-knight svg {
+.bg-queen svg {
   width: 100%;
   height: 100%;
   display: block;
@@ -851,7 +849,7 @@ table.mini {
   .card > .sec-title {
     padding: 18px 18px 0;
   }
-  .bg-knight {
+  .bg-queen {
     width: 280px;
     height: 280px;
     right: -50px;
