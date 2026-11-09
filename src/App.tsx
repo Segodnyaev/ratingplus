@@ -156,7 +156,6 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* водяной знак — огромный конь на фоне */}
       <div className="bg-knight" aria-hidden="true">
         <KnightIcon />
       </div>
@@ -255,11 +254,7 @@ export default function App() {
       </details>
 
       <footer className="foot">
-        Оценка по правилам пересчёта рейтинга ФШР (статья на{' '}
-        <a href="https://fenomenchess.ru/articles/reiting-fshr/" target="_blank" rel="noreferrer">
-          fenomenchess.ru
-        </a>
-        ). Официальный пересчёт выполняет федерация; рейтинги берутся из стартового списка на
+        Оценка по правилам пересчёта рейтинга ФШР. Официальный пересчёт выполняет федерация; рейтинги берутся из стартового списка на
         chess-results.com. Страницы разбираются прямо в браузере; внешние запросы идут только через
         публичные CORS-ретрансляторы.
       </footer>
