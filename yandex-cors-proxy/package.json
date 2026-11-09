@@ -1,0 +1,6 @@
+{
+  "name": "ratingplus-cors-proxy",
+  "version": "1.0.0",
+  "description": "CORS proxy for chess-results.com used by the ratingplus web app (Yandex Cloud Functions)",
+  "main": "index.js"
+}
