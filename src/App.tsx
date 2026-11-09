@@ -10,6 +10,7 @@ import {
   type PlayerInfo,
   type ParsedSourceUrl,
   type StartListData,
+  type StartListPlayer,
 } from './lib/chessResults'
 import { fetchPage } from './lib/fetchPage'
 import { calculateRatingChange } from './lib/rating'
@@ -28,6 +29,11 @@ interface ManualSlot<T> {
   fileName: string
 }
 
+/** Нормализация имени для сопоставления («Фамилия, Имя» в разных страницах может отличаться пробелами/ё) */
+function normName(s: string): string {
+  return s.toUpperCase().replace(/Ё/g, 'Е').replace(/[\s,.;]+/g, ' ').trim()
+}
+
 /** Сопоставление соперников со стартовым списком и расчёт */
 function buildResult(
   player: PlayerInfo,
@@ -37,11 +43,25 @@ function buildResult(
   via: string,
   manual: boolean,
 ): AnalysisResult {
-  // рейтинг самого игрока: сначала стартовый список, затем его страница
+  // индексы стартового списка: по номеру (snr) и по нормализованному имени —
+  // у архивных турниров ссылки на игроков спрятаны, номер берётся из «Ном.»,
+  // а если и его нет — сопоставляем по имени
+  const bySnr = new Map<number, StartListPlayer>()
+  const byName = new Map<string, StartListPlayer>()
+  if (sl) {
+    for (const p of sl.players) {
+      if (p.snr != null && !bySnr.has(p.snr)) bySnr.set(p.snr, p)
+      const n = normName(p.name)
+      if (n && !byName.has(n)) byName.set(n, p)
+    }
+  }
+
+  // рейтинг самого игрока: сначала стартовый список (по snr, затем по имени), затем его страница
   let playerRating: number | null = null
   let playerRatingSource: AnalysisResult['playerRatingSource'] = 'none'
   const selfInList =
-    sl && src?.playerSnr != null ? sl.players.find((p) => p.snr === src.playerSnr) : undefined
+    (src?.playerSnr != null ? bySnr.get(src.playerSnr) : undefined) ??
+    (player.name ? byName.get(normName(player.name)) : undefined)
   if (selfInList && selfInList.rating != null) {
     playerRating = selfInList.rating
     playerRatingSource = 'startlist'
@@ -52,12 +72,18 @@ function buildResult(
 
   const opponents = games.map((g) => {
     const inList =
-      sl && g.oppSnr != null ? sl.players.find((p) => p.snr === g.oppSnr) : undefined
+      (g.oppSnr != null ? bySnr.get(g.oppSnr) : undefined) ??
+      byName.get(normName(g.oppName)) ??
+      (g.oppStartNo != null && /^\d+$/.test(g.oppStartNo) ? bySnr.get(Number(g.oppStartNo)) : undefined)
     let rating: number | null = null
     let ratingSource: AnalysisResult['opponents'][number]['ratingSource'] = 'unknown'
-    if (inList) {
+    if (inList && inList.rating != null) {
       rating = inList.rating
       ratingSource = 'startlist'
+    } else if (g.oppNatRatingInTable != null && g.oppNatRatingInTable > 0) {
+      // нац. рейтинг из колонки «Рейт.Нац.» таблицы партий (у архивных турниров)
+      rating = g.oppNatRatingInTable
+      ratingSource = 'crosstable'
     } else if (g.oppRatingInTable != null && g.oppRatingInTable > 0) {
       rating = g.oppRatingInTable
       ratingSource = 'crosstable'
