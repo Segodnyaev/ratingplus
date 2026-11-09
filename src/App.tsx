@@ -256,13 +256,8 @@ export default function App() {
       </details>
 
       <footer className="foot">
-        Оценка по правилам пересчёта рейтинга ФШР (статья на{' '}
-        <a href="https://fenomenchess.ru/articles/reiting-fshr/" target="_blank" rel="noreferrer">
-          fenomenchess.ru
-        </a>
-        ). Официальный пересчёт выполняет федерация; рейтинги берутся из стартового списка на
-        chess-results.com. Страницы разбираются прямо в браузере; внешние запросы идут только через
-        публичные CORS-ретрансляторы.
+        Оценка по правилам пересчёта рейтинга ФШР. Официальный пересчёт выполняет федерация; рейтинги берутся из стартового списка на
+        chess-results.com.
       </footer>
     </div>
   )
