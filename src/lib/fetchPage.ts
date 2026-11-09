@@ -15,18 +15,34 @@ export interface ProxyDef {
   label: string
   build: (url: string) => string
   extract?: (raw: string) => string
+  /**
+   * POST-запрос к целевому сайту через прокси (нужен для ASP.NET-постбэков
+   * архивных турниров). body — уже urlencoded строка.
+   * Поддерживает только свой прокси — публичные ретрансляторы POST не умеют.
+   */
+  sendPost?: (url: string, body: string, contentType: string) => Promise<string>
 }
+
+const YANDEX_FUNC = 'https://functions.yandexcloud.net/d4evjrchtid3alfj53dk'
 
 export const PROXIES: ProxyDef[] = [
   {
     // свой прокси — Yandex Cloud Functions (без лимитов публичных ретрансляторов).
-    // Контракт: ?url=<encoded>, ответ должен содержать заголовок Access-Control-Allow-Origin: *.
+    // Контракт: GET ?url=<encoded> — просто скачать страницу;
+    // POST JSON {url, method, body, contentType} — произвольный запрос (постбэк).
     // Важно: в консоли Yandex Cloud у функции должен быть включён «Публичный доступ»,
     // иначе она отвечает 403 Forbidden — тогда цепочка просто переходит к следующим прокси.
     id: 'yandex-own',
     label: 'свой прокси',
-    build: (u) =>
-      `https://functions.yandexcloud.net/d4evjrchtid3alfj53dk?url=${encodeURIComponent(u)}`,
+    build: (u) => `${YANDEX_FUNC}?url=${encodeURIComponent(u)}`,
+    sendPost: async (target, body, contentType) => {
+      const res = await fetchWithTimeout(`${YANDEX_FUNC}?mode=post`, 25000, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: target, method: 'POST', body, contentType }),
+      })
+      return res
+    },
   },
   {
     id: 'allorigins-json',
@@ -55,6 +71,99 @@ export const PROXIES: ProxyDef[] = [
   },
 ]
 
+/*
+ * Архивные турниры (например, на s3.chess-results.com) отдают урезанную страницу:
+ * таблицы есть, но нет меню со ссылкой «Стартовый список». Вместо него внизу стоит
+ * ссылка «Отобразить дополнительную информацию» — это ASP.NET-постбэк:
+ *   <a id="linkbutton_show" href="javascript:__doPostBack('linkbutton_show','')">
+ * Браузер при клике отправляет POST на эту же страницу с hidden-полями формы
+ * (__EVENTTARGET=linkbutton_show, __VIEWSTATE, __VIEWSTATEGENERATOR,
+ * __EVENTVALIDATION) — и сервер возвращает полную страницу.
+ * Ниже мы делаем ровно то же самое без клика.
+ */
+
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+}
+
+/** Собирает тело постбэка из скрытых полей формы; null — постбэк не нужен/невозможен. */
+export function buildPostBackBody(html: string): string | null {
+  const link = /<a[^>]*id=["']linkbutton_show["'][^>]*>([\s\S]*?)<\/a>/i.exec(html)
+  if (!link) return null
+  // на неархивных турнирах эта ссылка есть, но пустая — тогда постбэк не нужен
+  if (!link[1].replace(/<[^>]+>/g, '').trim()) return null
+
+  const fields: Record<string, string> = {}
+  for (const m of html.matchAll(/<input[^>]*type=["']hidden["'][^>]*>/gi)) {
+    const tag = m[0]
+    const name = /name=["']([^"']+)["']/i.exec(tag)?.[1]
+    if (!name || fields[name] !== undefined) continue
+    const value = /value=["']([^"']*)["']/i.exec(tag)?.[1]
+    fields[name] = value === undefined ? '' : decodeHtmlEntities(value)
+  }
+  if (!fields['__VIEWSTATE']) return null
+  fields['__EVENTTARGET'] = 'linkbutton_show'
+  fields['__EVENTARGUMENT'] = ''
+  return new URLSearchParams(fields).toString()
+}
+
+/** Адрес, на который отправляется постбэк (action формы, иначе — текущий URL). */
+function postBackTarget(html: string, baseUrl: string): string {
+  const action = /<form[^>]*action=["']([^"']*)["']/i.exec(html)?.[1] ?? ''
+  try {
+    return new URL(action, baseUrl).toString()
+  } catch {
+    return baseUrl
+  }
+}
+
+/**
+ * Если страница — урезанный архивный вариант со ссылкой «Отобразить дополнительную
+ * информацию», выполняет постбэк через свой прокси и возвращает полную страницу.
+ * При любой ошибке возвращает исходный HTML (приложение продолжит работать с ним).
+ */
+async function expandAdditionalInfo(
+  html: string,
+  baseUrl: string,
+  onLog?: (line: string) => void,
+): Promise<string> {
+  const body = buildPostBackBody(html)
+  if (!body) return html
+
+  const proxy = PROXIES.find((p) => p.sendPost)
+  if (!proxy?.sendPost) {
+    onLog?.(
+      'Архивная страница требует раскрытия «Отобразить дополнительную информацию», но свой прокси недоступен — работаем с урезанной версией',
+    )
+    return html
+  }
+
+  try {
+    onLog?.('Архивный турнир: раскрываем «Отобразить дополнительную информацию»…')
+    const target = postBackTarget(html, baseUrl)
+    const full = await proxy.sendPost(target, body, 'application/x-www-form-urlencoded')
+    if (!full || full.length < 1000) throw new Error('пустой ответ')
+    // удавалось ли убрать саму ссылку — критерий полной страницы
+    if (/<a[^>]*id=["']linkbutton_show["'][^>]*>[\s\S]*?\S/.test(full)) {
+      onLog?.('Сервер вернул снова урезанную страницу — продолжаем с ней')
+      return full
+    }
+    onLog?.('Полная версия страницы получена')
+    return full
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    onLog?.(`Раскрытие не удалось (${msg}) — работаем с урезанной страницей`)
+    return html
+  }
+}
+
 function looksLikeChessResults(html: string): boolean {
   return (
     html.length > 1000 &&
@@ -65,11 +174,15 @@ function looksLikeChessResults(html: string): boolean {
   )
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number): Promise<string> {
+async function fetchWithTimeout(
+  url: string,
+  timeoutMs: number,
+  init?: RequestInit,
+): Promise<string> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const res = await fetch(url, { signal: controller.signal, redirect: 'follow' })
+    const res = await fetch(url, { ...init, signal: controller.signal, redirect: 'follow' })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return await res.text()
   } finally {
@@ -104,12 +217,11 @@ export async function fetchPage(
   // 1. прямой запрос — работает только если сайт вдруг отдаёт CORS-заголовок
   try {
     note('Пробуем загрузить напрямую…')
-    const html = await fetchWithTimeout(url, timeoutMs)
-    if (looksLikeChessResults(html)) {
-      note('Загружено напрямую')
-      return { html, via: 'напрямую', log }
-    }
-    throw new Error('ответ не похож на страницу chess-results')
+    const raw = await fetchWithTimeout(url, timeoutMs)
+    if (!looksLikeChessResults(raw)) throw new Error('ответ не похож на страницу chess-results')
+    const html = await expandAdditionalInfo(raw, url, note)
+    note('Загружено напрямую')
+    return { html, via: 'напрямую', log }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     note(`Напрямую не получилось (${msg}) — переходим к прокси`)
@@ -122,8 +234,9 @@ export async function fetchPage(
       try {
         note(`Прокси ${proxy.label}…`)
         const raw = await fetchWithTimeout(proxy.build(url), timeoutMs)
-        const html = proxy.extract ? proxy.extract(raw) : raw
-        if (!looksLikeChessResults(html)) throw new Error('ответ не похож на страницу chess-results')
+        const first = proxy.extract ? proxy.extract(raw) : raw
+        if (!looksLikeChessResults(first)) throw new Error('ответ не похож на страницу chess-results')
+        const html = await expandAdditionalInfo(first, url, note)
         note(`Загружено через ${proxy.label}`)
         return { html, via: proxy.label, log }
       } catch (e) {

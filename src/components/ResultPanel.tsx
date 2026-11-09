@@ -58,6 +58,9 @@ export default function ResultPanel({
   return (
     <div className="result">
       <section className="card player-card fade-up">
+        <div className="player-top">
+          <h2>{player.name}</h2>
+        </div>
         {result.startListTitle && <div className="player-meta">{result.startListTitle}</div>}
         <div className="player-meta">
           {[player.club, player.born ? `г.р. ${player.born}` : null, player.federation]
