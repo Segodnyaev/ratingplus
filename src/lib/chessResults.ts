@@ -4,7 +4,11 @@
  *
  * Ожидаемые страницы:
  *  - art=9  — личная таблица игрока: метаданные + партии по турам
- *  - art=0  — стартовый список турнира (национальные рейтинги участников)
+ *             (в командных турнирах устроена так же, как в личных)
+ *  - art=0  — стартовый список турнира (национальные рейтинги участников);
+ *             в командных турнирах это таблица КОМАНД, игроков там нет
+ *  - art=8  — «Составы команд без результатов туров»: единственная страница
+ *             командного турнира, где перечислены все игроки с их рейтингами
  */
 
 export interface PlayerInfo {
@@ -48,17 +52,25 @@ export interface CrosstableData {
 }
 
 export interface StartListPlayer {
-  /** номер игрока в турнире; null — не удалось определить (нет ссылки и колонки «Ном.») */
+  /** номер игрока в турнире; null — не удалось определить (нет ссылки и колонки «Ном.»);
+   *  у составов команд (art=8) номеров нет — сопоставление только по имени */
   snr: number | null
   name: string
   /** национальный рейтинг; null — рейтинга нет (считается 1000) */
   rating: number | null
   rawRating: string
+  /** название команды (только для составов команд art=8) */
+  team?: string | null
 }
+
+/** откуда взят список игроков с рейтингами */
+export type StartListSource = 'startlist' | 'teamcompositions'
 
 export interface StartListData {
   players: StartListPlayer[]
   tournamentTitle: string | null
+  /** «startlist» — art=0 (личный турнир), «teamcompositions» — art=8 (командный) */
+  source?: StartListSource
 }
 
 const CR_HOST = /(^|\.)chess-results\.com$/i
@@ -118,6 +130,20 @@ export function buildIndividualUrl(src: ParsedSourceUrl): string {
 export function buildStartListUrl(src: ParsedSourceUrl): string {
   const p = new URLSearchParams(src.params)
   p.set('art', '0')
+  p.delete('snr')
+  p.delete('rd')
+  return `https://${src.host}/tnr${src.tournamentId}.aspx?${p.toString()}`
+}
+
+/**
+ * Ссылка на «Составы команд без результатов туров» (art=8) — для командных
+ * турниров: единственное представление, где перечислены все игроки команд
+ * с их рейтингами (в т.ч. национальными). Навигационной ссылки на эту страницу
+ * в HTML нет (меню рисуется скриптом), поэтому адрес собирается напрямую.
+ */
+export function buildTeamCompositionsUrl(src: ParsedSourceUrl): string {
+  const p = new URLSearchParams(src.params)
+  p.set('art', '8')
   p.delete('snr')
   p.delete('rd')
   return `https://${src.host}/tnr${src.tournamentId}.aspx?${p.toString()}`
@@ -409,11 +435,120 @@ export function parseStartList(html: string): StartListData {
     }
 
     if (players.length > 0) {
-      return { players, tournamentTitle }
+      return { players, tournamentTitle, source: 'startlist' }
     }
   }
 
   throw new Error('Не удалось разобрать стартовый список: не найдены строки игроков')
+}
+
+/**
+ * Разбор «Составы команд без результатов туров» (art=8) — командные турниры.
+ *
+ * Устройство страницы: одна большая таблица CRs1, в которой чередуются
+ *  - строка-заголовок команды: одна ячейка «  N. Название команды (регион) (РейтСр:…)»
+ *  - строка заголовков колонок: Bo. | титул | Имя | Рейт.Межд. | Рейт.Нац. | ФЕД. | …
+ *  - строки игроков: номер доски, титул, имя, рейтинги, …
+ *
+ * Номеров snr у игроков здесь нет, поэтому сопоставление с таблицей партий
+ * делается по имени. Важно: snr НЕ выдумываем последовательной нумерацией —
+ * иначе номера досок совпадут со «ст.ном.» соперников и рейтинги перепутаются.
+ */
+export function parseTeamCompositions(html: string): StartListData {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const tournamentTitle = clean(doc.title) || null
+  const tables = Array.from(doc.querySelectorAll<HTMLTableElement>('table.CRs1'))
+
+  interface TeamCols {
+    name: number
+    nat: number
+    fide: number
+  }
+
+  const players: StartListPlayer[] = []
+  let team: string | null = null
+  let cols: TeamCols | null = null
+
+  for (const table of tables) {
+    for (const row of Array.from(table.rows)) {
+      const cells = Array.from(row.cells)
+      if (cells.length === 0) continue
+      const text = cells.map((c) => clean(c.textContent))
+      const hasTh = cells.some((c) => c.tagName === 'TH')
+
+      // строка заголовков колонок — карта колонок по «Имя» и рейтингам
+      if (hasTh) {
+        const name = text.findIndex((t) => /^имя$|^name$/i.test(t))
+        if (name === -1) {
+          cols = null // двухстрочная шапка без «Имя» — ждём следующую строку заголовков
+          continue
+        }
+        // нац. рейтинг: «Рейт.Нац.» / «Nat.Rtg»; если нац. колонки нет вообще
+        // (зарубежный турнир без российских рейтингов) — берём межд. рейтинг
+        let nat = text.findIndex((t) => /рейт\.?\s*нац|нац\.?\s*рейт|nat\.?\s*(rtg|rating)|national/i.test(t))
+        let fide = -1
+        if (nat === -1) {
+          nat = text.findIndex((t) => /рейт|rtg|rating/i.test(t))
+          if (nat !== -1) fide = nat // единственная рейтинговая колонка — она и используется
+        } else {
+          fide = text.findIndex((t) => /рейт\.?\s?межд|^rtg\.?\s?fide|fide/i.test(t))
+          if (fide === nat) fide = -1
+        }
+        cols = { name, nat, fide }
+        continue
+      }
+
+      // строка-заголовок команды: одна ячейка вида «N. Название (регион) (РейтСр:…)»
+      if (cells.length === 1) {
+        const m = text[0].match(/^\d+\.\s+(.+)$/)
+        team = m ? cleanTeamName(m[1]) : null
+        continue
+      }
+
+      // строка игрока: первый столбец — номер доски (число); прочие одноячеечные
+      // строки (например «Капитан: …») отбрасываются этим условием
+      const board = Number.parseInt(text[0], 10)
+      if (!Number.isFinite(board)) continue
+      if (!cols || cols.name < 0 || cols.name >= cells.length) continue
+      const name = clean(cells[cols.name].textContent)
+      if (!name) continue
+
+      const ratingIdx = cols.nat >= 0 && cols.nat < cells.length ? cols.nat : cols.fide
+      const rawRating = ratingIdx >= 0 && ratingIdx < cells.length ? clean(cells[ratingIdx].textContent) : ''
+      const rating = parseRatingCell(rawRating)
+
+      players.push({
+        snr: null, // номеров нет — сопоставление только по имени (см. комментарий выше)
+        name,
+        // 0 или пустая ячейка — рейтинга нет
+        rating: rating != null && rating > 0 ? rating : null,
+        rawRating,
+        team,
+      })
+    }
+  }
+
+  if (players.length === 0) {
+    throw new Error(
+      'Не удалось разобрать «Составы команд без результатов туров»: в таблице не найдено строк игроков. ' +
+        'Возможно, турнир не командный.',
+    )
+  }
+
+  return { players, tournamentTitle, source: 'teamcompositions' }
+
+  /** Название команды без служебных хвостов: «(РейтСр:…)», «Капитан: …» и незакрытых скобок */
+  function cleanTeamName(s: string): string {
+    let t = s
+    const cut = t.search(/\(РейтСр|\(Рейт\.\s*ср|\(Avg/i)
+    if (cut >= 0) t = t.slice(0, cut)
+    const cap = t.search(/\s*Капитан:/i)
+    if (cap >= 0) t = t.slice(0, cap)
+    t = t.replace(/\s+/g, ' ').trim()
+    // регион мог остаться с незакрытой скобкой: «Название (Новосибирск» → «Название»
+    t = t.replace(/\s*\([^()]*$/, '').trim()
+    return t
+  }
 }
 
 /** Определение типа сохранённой страницы (для ручного режима) */
@@ -422,9 +557,16 @@ export function classifyPage(html: string, baseUrl: string): 'crosstable' | 'sta
     const ct = parseIndividualCrosstable(html, baseUrl)
     if (ct.games.length > 0) return 'crosstable'
   } catch {
-    // не личная таблица — пробуем стартовый список
+    // не личная таблица — пробуем списки игроков
   }
-  const sl = parseStartList(html)
-  if (sl.players.length > 0) return 'startlist'
+  // стартовый список: сначала обычный (art=0), затем составы команд (art=8)
+  try {
+    const sl = parseStartList(html)
+    if (sl.players.length > 0) return 'startlist'
+  } catch {
+    // возможно, это страница «Составы команд без результатов туров»
+  }
+  const tc = parseTeamCompositions(html)
+  if (tc.players.length > 0) return 'startlist'
   throw new Error('Файл не похож на страницу chess-results.com')
 }

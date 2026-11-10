@@ -2,9 +2,11 @@ import { useCallback, useState } from 'react'
 import {
   buildIndividualUrl,
   buildStartListUrl,
+  buildTeamCompositionsUrl,
   parseChessResultsUrl,
   parseIndividualCrosstable,
   parseStartList,
+  parseTeamCompositions,
   type CrosstableData,
   type GameInfo,
   type PlayerInfo,
@@ -69,6 +71,8 @@ function buildResult(
     playerRating = player.nationalRating
     playerRatingSource = 'playerPage'
   }
+  // команда игрока (только для составов команд art=8) — для показа в карточке
+  const playerTeam = selfInList?.team ?? null
 
   const opponents = games.map((g) => {
     const inList =
@@ -107,9 +111,11 @@ function buildResult(
   return {
     player,
     playerRatingSource,
+    playerTeam,
     opponents,
     calc,
     startListTitle: sl?.tournamentTitle ?? null,
+    startListSource: sl?.source ?? 'startlist',
     via,
     manual,
   }
@@ -141,11 +147,25 @@ export default function App() {
       const page1 = await fetchPage(individualUrl)
       const ct = parseIndividualCrosstable(page1.html, individualUrl)
 
-      const slUrl = ct.startListUrl ?? buildStartListUrl(src)
-      const page2 = await fetchPage(slUrl)
-      const sl = parseStartList(page2.html)
+      // Список игроков с рейтингами: для личного турнира — «Стартовый список»
+      // (art=0), для командного — «Составы команд без результатов туров» (art=8):
+      // на art=0 командного турнира перечислены только команды, без игроков и
+      // без колонки «Имя» — парсинг не удаётся, и мы автоматически уходим на art=8
+      let sl: StartListData
+      let slVia: string
+      try {
+        const slUrl = ct.startListUrl ?? buildStartListUrl(src)
+        const page2 = await fetchPage(slUrl)
+        sl = parseStartList(page2.html)
+        slVia = page2.via
+      } catch {
+        const tcUrl = buildTeamCompositionsUrl(src)
+        const page3 = await fetchPage(tcUrl)
+        sl = parseTeamCompositions(page3.html)
+        slVia = `${page3.via} (составы команд)`
+      }
 
-      const res = buildResult(ct.player, ct.games, sl, src, `${page1.via} + ${page2.via}`, false)
+      const res = buildResult(ct.player, ct.games, sl, src, `${page1.via} + ${slVia}`, false)
       setResult(res)
       setPhase('done')
     } catch (e) {
@@ -170,7 +190,15 @@ export default function App() {
         setManualCt(slot)
         if (manualSl) finishManual(slot, manualSl)
       } else {
-        const data = parseStartList(text)
+        // файл списка: сначала обычный стартовый список (art=0),
+        // затем составы команд (art=8) — в командных турнирах файл 2
+        // сохраняют именно со страницы «Составы команд без результатов туров»
+        let data: StartListData
+        try {
+          data = parseStartList(text)
+        } catch {
+          data = parseTeamCompositions(text)
+        }
         const slot = { data, fileName: file.name }
         setManualSl(slot)
         if (manualCt) finishManual(manualCt, slot)
@@ -248,8 +276,8 @@ export default function App() {
         <summary>Ручной режим — если прокси недоступны</summary>
         <p className="hint">
           Сохраните две страницы chess-results.com на диск (Ctrl+S): 1 — личную таблицу игрока,
-          2 — «Стартовый список» турнира, и загрузите оба файла. Разбор и расчёт выполняются
-          локально, без сети.
+          2 — «Стартовый список» турнира (для командных — «Составы команд без результатов
+          туров»), и загрузите оба файла. Разбор и расчёт выполняются локально, без сети.
         </p>
         <div className="manual-row">
           <label className="btn-ghost file-btn">
@@ -275,7 +303,7 @@ export default function App() {
                 if (f) void onManualFile('sl', f)
               }}
             />
-            Файл 2 — стартовый список
+            Файл 2 — стартовый список (командные: «Составы команд без результатов туров»)
           </label>
           {manualSl && <span className="chip ok">✓ {manualSl.fileName}</span>}
         </div>

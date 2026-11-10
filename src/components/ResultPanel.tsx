@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { EXPECTED_TABLE, K_TABLE, type RatingChange } from '../lib/rating'
-import type { PlayerInfo } from '../lib/chessResults'
+import type { PlayerInfo, StartListSource } from '../lib/chessResults'
 
 export interface OpponentRow {
   round: number
@@ -15,9 +15,13 @@ export interface OpponentRow {
 export interface AnalysisResult {
   player: PlayerInfo
   playerRatingSource: 'startlist' | 'playerPage' | 'none'
+  /** команда игрока (только для командных турниров, из составов команд) */
+  playerTeam?: string | null
   opponents: OpponentRow[]
   calc: RatingChange
   startListTitle: string | null
+  /** откуда взят список игроков с рейтингами: art=0 или составы команд (art=8) */
+  startListSource: StartListSource
   via: string
   manual: boolean
 }
@@ -38,9 +42,14 @@ function scoreBadge(score: number | null, raw: string): ReactNode {
 }
 
 const SOURCE_LABEL: Record<OpponentRow['ratingSource'], string> = {
-  startlist: 'из стартового списка',
+  startlist: 'из стартового списка / состава команд',
   crosstable: 'из таблицы партий',
   unknown: 'нет рейтинга → считаем 1000',
+}
+
+/** подпись источника рейтинга в зависимости от типа списка */
+function startlistLabel(source: StartListSource): string {
+  return source === 'teamcompositions' ? 'из составов команд' : 'из стартового списка'
 }
 
 export default function ResultPanel({
@@ -53,16 +62,23 @@ export default function ResultPanel({
   const { player, calc, opponents } = result
   const unplayed = opponents.filter((o) => o.score == null).length
   const unknownOpp = opponents.filter((o) => o.rating == null && o.score != null).length
+  const fromTeams = result.startListSource === 'teamcompositions'
 
   return (
     <div className="result">
       <section className="card player-card fade-up">
         <div className="player-top">
           <h2>{player.name}</h2>
+          <span className="chip">{result.manual ? 'локальные файлы' : `источник: ${result.via}`}</span>
         </div>
         {result.startListTitle && <div className="player-meta">{result.startListTitle}</div>}
         <div className="player-meta">
-          {[player.club, player.born ? `г.р. ${player.born}` : null, player.federation]
+          {[
+            fromTeams && result.playerTeam ? `команда: ${result.playerTeam}` : null,
+            player.club,
+            player.born ? `г.р. ${player.born}` : null,
+            player.federation,
+          ]
             .filter(Boolean)
             .join(' · ')}
         </div>
@@ -72,7 +88,7 @@ export default function ResultPanel({
             <div className="v">{calc.baseRating}</div>
             <div className="src">
               {result.playerRatingSource === 'startlist'
-                ? 'из стартового списка'
+                ? startlistLabel(result.startListSource)
                 : result.playerRatingSource === 'playerPage'
                   ? 'со страницы игрока'
                   : 'нет — считаем как у новичка (1000)'}
@@ -119,6 +135,12 @@ export default function ResultPanel({
         {calc.usedDefaultPlayerRating && (
           <div className="warn-line">
             У игрока нет национального рейтинга — расчёт выполнен как для новичка с рейтингом 1000.
+          </div>
+        )}
+        {fromTeams && (
+          <div className="warn-line">
+            Командный турнир: рейтинги взяты со страницы «Составы команд без результатов туров»,
+            сопоставление игроков — по имени.
           </div>
         )}
         {unknownOpp > 0 && (
@@ -199,7 +221,7 @@ export default function ResultPanel({
         </div>
         <div className="legend">
           <span>
-            <span className="src-dot startlist" /> рейтинг из стартового списка
+            <span className="src-dot startlist" /> {startlistLabel(result.startListSource)}
           </span>
           <span>
             <span className="src-dot crosstable" /> из таблицы партий
@@ -280,8 +302,8 @@ export default function ResultPanel({
             Новичок без рейтинга считается имеющим рейтинг 1000; рейтинг не опускается ниже 1000.
           </li>
           <li>
-            Национальные рейтинги игрока и соперников берутся из «Стартового списка» турнира на
-            chess-results.com.
+            Национальные рейтинги игрока и соперников берутся со страниц chess-results.com:
+            «Стартовый список» турнира, а для командных — «Составы команд без результатов туров».
           </li>
           <li>
             Официальный пересчёт выполняет ФШР — результат здесь оценочный.
