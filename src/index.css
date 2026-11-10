@@ -54,12 +54,10 @@ body::after {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background-image: conic-gradient(
-    rgba(255, 255, 255, 0.032) 90deg,
-    transparent 90deg 180deg,
-    rgba(255, 255, 255, 0.032) 180deg 270deg,
-    transparent 270deg
-  );
+  background-image: conic-gradient(rgba(255, 255, 255, 0.032) 90deg,
+      transparent 90deg 180deg,
+      rgba(255, 255, 255, 0.032) 180deg 270deg,
+      transparent 270deg);
   background-size: 72px 72px;
 }
 
@@ -75,6 +73,7 @@ a {
   color: var(--accent-2);
   text-decoration: none;
 }
+
 a:hover {
   text-decoration: underline;
 }
@@ -106,16 +105,18 @@ a:hover {
 }
 
 .top h1 {
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  margin: 0;
+}
+
+.top .title {
   margin: 0;
   font-size: 23px;
   font-weight: 800;
   letter-spacing: -0.02em;
-}
-
-.subtitle {
-  color: var(--muted);
-  font-size: 13.5px;
-  margin-top: 2px;
+  line-height: 1.2;
 }
 
 /* ===== водяной знак на фоне ===== */
@@ -299,20 +300,25 @@ a:hover {
     opacity: 0;
     transform: translateY(18px) scale(0.6);
   }
+
   7% {
     opacity: 1;
     transform: translateY(0) scale(1.08);
   }
+
   11% {
     transform: translateY(-7px) scale(1);
   }
+
   15% {
     transform: translateY(0) scale(1);
   }
+
   88% {
     opacity: 1;
     transform: translateY(0);
   }
+
   97%,
   100% {
     opacity: 0;
@@ -514,7 +520,7 @@ a:hover {
   font-weight: 700;
 }
 
-.card > .sec-title {
+.card>.sec-title {
   padding: 22px 26px 0;
 }
 
@@ -829,6 +835,7 @@ table.mini {
     opacity: 0;
     transform: translateY(12px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -839,32 +846,36 @@ table.mini {
   .app {
     padding: 26px 14px 48px;
   }
+
   .delta-num {
     font-size: 46px;
   }
-  .top h1 {
-    font-size: 20px;
-  }
+
   .hero {
     padding: 20px 18px 16px;
   }
+
   .legend {
     padding: 8px 18px 16px;
   }
+
   details.formula,
   .manual {
     padding-left: 18px;
     padding-right: 18px;
   }
-  .card > .sec-title {
+
+  .card>.sec-title {
     padding: 18px 18px 0;
   }
+
   .bg-queen {
     width: 280px;
     height: 280px;
     right: -50px;
     bottom: -50px;
   }
+
   .lineup-piece {
     font-size: 34px;
   }

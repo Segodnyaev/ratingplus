@@ -220,10 +220,10 @@ export default function App() {
           <BrandIcon />
         </div>
         <div>
-          <h1>Рейтинг+</h1>
-          <div className="subtitle">
-            насколько изменится рейтинг ФШР по итогам турнира — ещё до официального пересчёта
-          </div>
+          <div className="title">Рейтинг+</div>
+          <h1 className="subtitle">
+            насколько изменится рейтинг по шахматам (ФШР) по итогам турнира — ещё до официального пересчёта
+          </h1>
         </div>
       </header>
 
